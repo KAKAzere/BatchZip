@@ -1,0 +1,66 @@
+<svg width="1280" height="180" viewBox="0 0 1280 180" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#081B4B"/>
+      <stop offset="55%" stop-color="#0F5DDA"/>
+      <stop offset="100%" stop-color="#4FA3FF"/>
+    </linearGradient>
+
+    <linearGradient id="shape" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D8F0FF"/>
+      <stop offset="100%" stop-color="#78B8FF"/>
+    </linearGradient>
+
+    <filter id="blurGlow">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="8" y="8" width="1264" height="164" rx="24" fill="url(#bg)"/>
+
+  <!-- Ambient light -->
+  <circle cx="1090" cy="48" r="42" fill="#9DD8FF" opacity="0.10" filter="url(#blurGlow)"/>
+  <circle cx="1180" cy="120" r="26" fill="#B7E6FF" opacity="0.08" filter="url(#blurGlow)"/>
+
+  <!-- Left accent -->
+  <rect x="72" y="54" width="56" height="4" rx="2" fill="#A8D8FF"/>
+
+  <!-- Title -->
+  <text x="72"
+        y="88"
+        font-family="SF Pro Display, Segoe UI, Inter, Arial"
+        font-size="36"
+        font-weight="700"
+        fill="#FFFFFF">
+    BatchZip
+  </text>
+
+  <!-- Slogan -->
+  <text x="72"
+        y="116"
+        font-family="SF Pro Text, Segoe UI, Inter, Arial"
+        font-size="18"
+        fill="#D8E9FF">
+    Modern Batch Compression for Windows
+  </text>
+
+  <!-- Right geometric mark -->
+  <g transform="translate(1030,38)">
+    <rect x="0" y="18" width="68" height="68" rx="18"
+          fill="url(#shape)" opacity="0.96"/>
+
+    <rect x="26" y="-2" width="68" height="68" rx="18"
+          fill="url(#shape)" opacity="0.72"/>
+
+    <rect x="52" y="24" width="68" height="68" rx="18"
+          fill="url(#shape)" opacity="0.42"/>
+
+    <!-- Thin connector -->
+    <path d="M44 42 L78 24 M70 68 L104 50"
+          stroke="white"
+          stroke-opacity="0.28"
+          stroke-width="2"
+          stroke-linecap="round"/>
+  </g>
+</svg>
