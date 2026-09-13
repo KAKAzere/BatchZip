@@ -4,6 +4,14 @@
 
 # BatchZip
 
+<p align="center">
+
+<a href="https://github.com/KAKAzere/BatchZip/releases">
+<img src="https://img.shields.io/badge/Download-Latest%20Release-blue?style=for-the-badge" alt="Download">
+</a>
+
+</p>
+
 BatchZip is a modern batch compression tool for Windows, built with PySide6 and 7-Zip.
 
 It lets you queue multiple files and folders, choose ZIP or 7Z formats, reorder tasks, pause and resume compression, and select a shared output folder.
