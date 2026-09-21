@@ -1,14 +1,28 @@
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.compressor import Compressor
+from core.compressor import (
+    Compressor,
+    InvalidOutputLocationError,
+    SevenZipLaunchError,
+    SevenZipNotFoundError,
+    UnsupportedArchiveFormatError,
+)
+from core.compress_thread import CompressThread
 from core.progress import extract_progress, iter_output_messages
+from core.task import Task
 
 
 class CompressorPathTests(unittest.TestCase):
+    @patch("core.compressor.find_7z", return_value=None)
+    def test_reports_missing_7zip_during_detection(self, find_7z):
+        with self.assertRaises(SevenZipNotFoundError):
+            Compressor()
+
     def test_uses_requested_name_when_available(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Compressor._unique_output_path(
@@ -33,7 +47,7 @@ class CompressorPathTests(unittest.TestCase):
             source.write_text("test", encoding="utf-8")
             compressor = Compressor(executable="7z")
 
-            with self.assertRaises(ValueError):
+            with self.assertRaises(UnsupportedArchiveFormatError):
                 compressor.compress(object_with_path(source), archive_format="rar")
 
     def test_rejects_output_folder_inside_source_folder(self):
@@ -43,13 +57,39 @@ class CompressorPathTests(unittest.TestCase):
             output = source / "output"
             compressor = Compressor(executable="7z")
 
-            with self.assertRaises(ValueError):
+            with self.assertRaises(InvalidOutputLocationError):
                 compressor.compress(
                     object_with_path(source),
                     output_folder=output,
                 )
 
             self.assertFalse(output.exists())
+
+    def test_reports_missing_source_separately(self):
+        compressor = Compressor(executable="7z")
+
+        with self.assertRaises(FileNotFoundError):
+            compressor.compress(object_with_path("missing.txt"))
+
+    @patch("core.compressor.subprocess.Popen", side_effect=FileNotFoundError)
+    def test_reports_missing_7zip_at_launch_separately(self, popen):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.txt"
+            source.write_text("test", encoding="utf-8")
+            compressor = Compressor(executable="7z")
+
+            with self.assertRaises(SevenZipNotFoundError):
+                compressor.compress(object_with_path(source))
+
+    @patch("core.compressor.subprocess.Popen", side_effect=PermissionError)
+    def test_reports_7zip_launch_failure_separately(self, popen):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.txt"
+            source.write_text("test", encoding="utf-8")
+            compressor = Compressor(executable="7z")
+
+            with self.assertRaises(SevenZipLaunchError):
+                compressor.compress(object_with_path(source))
 
     @patch("core.compressor.subprocess.Popen")
     def test_compress_launches_7zip_with_unique_output(self, popen):
@@ -100,6 +140,145 @@ class ProgressParserTests(unittest.TestCase):
             list(iter_output_messages(stream)),
             [" 0%", " 25%", " 75%", "100%"],
         )
+
+
+class CompressThreadFailureTests(unittest.TestCase):
+    def test_7zip_launch_failure_uses_launch_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.txt"
+            source.write_text("test", encoding="utf-8")
+            task = Task(str(source))
+            thread = CompressThread([task], "", "zip")
+
+            with patch(
+                "core.compress_thread.Compressor",
+                return_value=LaunchFailingCompressor(),
+            ):
+                thread.run()
+
+            self.assertEqual(task.status, "Failed")
+            self.assertIn("Unable to Start 7-Zip", task.error_message)
+            self.assertIn("What happened:", task.error_message)
+            self.assertIn("Possible reasons:", task.error_message)
+            self.assertIn("Suggestion:", task.error_message)
+            self.assertNotIn("Source Not Found", task.error_message)
+
+    def test_failed_compression_removes_partial_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task, output, finished = self.run_compression(
+                directory,
+                return_code=2,
+            )
+
+            self.assertEqual(task.status, "Failed")
+            self.assertFalse(output.exists())
+            self.assertEqual(finished, [False])
+
+    def test_unexpected_error_removes_current_archive_and_clears_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            source = directory / "sample.txt"
+            source.write_text("test", encoding="utf-8")
+            output = directory / "sample.zip"
+            process = UnexpectedFailureProcess()
+            compressor = FinishedCompressor(process, output)
+            task = Task(str(source))
+            errors = []
+            thread = CompressThread([task], "", "zip")
+            thread.error.connect(errors.append)
+
+            with patch("core.compress_thread.Compressor", return_value=compressor):
+                thread.run()
+
+            self.assertFalse(output.exists())
+            self.assertEqual(thread._current_output_path, "")
+            self.assertEqual(len(errors), 1)
+
+    def test_non_user_255_is_reported_as_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task, output, finished = self.run_compression(
+                directory,
+                return_code=255,
+            )
+
+            self.assertEqual(task.status, "Failed")
+            self.assertFalse(output.exists())
+            self.assertEqual(finished, [False])
+            self.assertIn("Compression Failed", task.error_message)
+            self.assertNotIn("Compression Cancelled", task.error_message)
+
+    def test_successful_compression_keeps_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task, output, finished = self.run_compression(
+                directory,
+                return_code=0,
+            )
+
+            self.assertEqual(task.status, "Completed")
+            self.assertTrue(output.exists())
+            self.assertEqual(finished, [True])
+
+    @staticmethod
+    def run_compression(directory, return_code):
+        directory = Path(directory)
+        source = directory / "sample.txt"
+        source.write_text("test", encoding="utf-8")
+        output = directory / "sample.zip"
+        process = FinishedProcess(return_code)
+        compressor = FinishedCompressor(process, output)
+        task = Task(str(source))
+        finished = []
+        thread = CompressThread([task], "", "zip")
+        thread.taskFinished.connect(lambda _, success: finished.append(success))
+
+        with patch("core.compress_thread.Compressor", return_value=compressor):
+            thread.run()
+
+        return task, output, finished
+
+
+class FinishedProcess:
+    def __init__(self, return_code):
+        self.returncode = return_code
+        self.stdout = io.BytesIO()
+        self.pid = os.getpid()
+
+    def poll(self):
+        return self.returncode
+
+
+class UnexpectedFailureProcess(FinishedProcess):
+    def __init__(self):
+        super().__init__(return_code=2)
+        self.poll_count = 0
+
+    def poll(self):
+        self.poll_count += 1
+
+        if self.poll_count == 1:
+            return None
+
+        raise RuntimeError("unexpected poll failure")
+
+
+class FinishedCompressor:
+    def __init__(self, process, output):
+        self.process = process
+        self.output = output
+
+    def compress(self, task, output_folder, archive_format):
+        self.output.write_bytes(b"partial archive")
+        return self.process, str(self.output)
+
+    @staticmethod
+    def error_message(return_code):
+        return Compressor.error_message(return_code)
+
+
+class LaunchFailingCompressor:
+    @staticmethod
+    def compress(task, output_folder, archive_format):
+        raise SevenZipLaunchError("raw launch error")
 
 
 def object_with_path(path):

@@ -236,6 +236,11 @@ class TaskCard(QFrame):
 
         self.task.status = status
 
+        if status == "Failed" and self.task.error_message:
+            self.setToolTip(self.task.error_message)
+        else:
+            self.setToolTip("")
+
         color = self.STATUS_COLORS.get(status, "#909399")
 
         # 直接显示状态文字（Waiting 不再被覆盖）

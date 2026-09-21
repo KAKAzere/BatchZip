@@ -7,7 +7,13 @@ from pathlib import Path
 import psutil
 from PySide6.QtCore import QThread, Signal
 
-from core.compressor import Compressor
+from core.compressor import (
+    Compressor,
+    InvalidOutputLocationError,
+    SevenZipLaunchError,
+    SevenZipNotFoundError,
+    UnsupportedArchiveFormatError,
+)
 from core.progress import extract_progress, iter_output_messages
 
 
@@ -39,13 +45,25 @@ class CompressThread(QThread):
     def run(self):
         try:
             compressor = Compressor()
-        except FileNotFoundError:
+        except SevenZipNotFoundError:
             self.error.emit(
-                "Unable to locate 7z.exe. Install 7-Zip and try again."
+                self._user_error(
+                    "7-Zip Not Found",
+                    "BatchZip could not start the compression program.",
+                    "7-Zip may not be installed, or its location could not be detected.",
+                    "Install 7-Zip or check the installation, then try again.",
+                )
             )
             return
-        except Exception as exc:
-            self.error.emit(f"Unable to initialize 7-Zip: {exc}")
+        except Exception:
+            self.error.emit(
+                self._user_error(
+                    "Unable to Start Compression",
+                    "BatchZip could not prepare the compression program.",
+                    "7-Zip may be unavailable or unable to start.",
+                    "Check the 7-Zip installation, then try again.",
+                )
+            )
             return
 
         success = 0
@@ -70,10 +88,10 @@ class CompressThread(QThread):
                         self.output_folder or None,
                         self.archive_format,
                     )
-                except (OSError, ValueError) as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
                     task.status = "Failed"
                     task.progress = 0
-                    task.error_message = str(exc)
+                    task.error_message = self._compress_error_message(exc)
                     failed += 1
                     self.taskFinished.emit(task, False)
                     continue
@@ -93,13 +111,11 @@ class CompressThread(QThread):
                     process_handle = None
 
                 progress = 0
-                output_lines = []
 
                 while self.process.poll() is None:
                     previous_progress = progress
                     progress = self._drain_output(
                         output_queue,
-                        output_lines,
                         task,
                         progress,
                     )
@@ -132,7 +148,6 @@ class CompressThread(QThread):
                 reader.join(timeout=1)
                 progress = self._drain_output(
                     output_queue,
-                    output_lines,
                     task,
                     progress,
                 )
@@ -156,12 +171,12 @@ class CompressThread(QThread):
                     self.taskProgress.emit(task, 100)
                     self.taskFinished.emit(task, True)
                 else:
+                    self._remove_partial_archive(output_path)
                     task.status = "Failed"
                     task.progress = 0
                     task.error_message = self._failure_message(
                         compressor,
                         self.process.returncode,
-                        output_lines,
                     )
                     failed += 1
                     self.taskFinished.emit(task, False)
@@ -175,9 +190,114 @@ class CompressThread(QThread):
             elif self._running:
                 self.overallStatus.emit("Completed")
                 self.allFinished.emit(success, failed, last_folder)
-        except Exception as exc:
-            self._terminate_process()
-            self.error.emit(f"Unexpected compression error: {exc}")
+        except Exception:
+            try:
+                self._terminate_process()
+            except Exception:
+                pass
+
+            try:
+                if self._current_output_path:
+                    self._remove_partial_archive(self._current_output_path)
+            finally:
+                self._current_output_path = ""
+            self.error.emit(
+                self._user_error(
+                    "Compression Failed",
+                    "BatchZip could not continue the compression task.",
+                    "The compression program or required files may be unavailable.",
+                    "Check the source files and output location, then try again.",
+                )
+            )
+
+    @staticmethod
+    def _user_error(title, what, cause, suggestion):
+        return (
+            f"{title}\n\nWhat happened:\n{what}\n\n"
+            f"Possible reasons:\n{cause}\n\nSuggestion:\n{suggestion}"
+        )
+
+    @classmethod
+    def _compress_error_message(cls, error):
+        if isinstance(error, SevenZipNotFoundError):
+            return cls._user_error(
+                "7-Zip Not Found",
+                "BatchZip could not start the compression program.",
+                "- 7-Zip may not be installed, or its location may no longer be available.",
+                "Install 7-Zip or check the installation, then try again.",
+            )
+
+        if isinstance(error, SevenZipLaunchError):
+            return cls._user_error(
+                "Unable to Start 7-Zip",
+                "7-Zip could not be started.",
+                "- Windows blocked the application.\n"
+                "- The executable permission is restricted.",
+                "Check your 7-Zip installation and permissions, then try again.",
+            )
+
+        if isinstance(error, FileNotFoundError):
+            return cls._user_error(
+                "Source Not Found",
+                "BatchZip could not find the file or folder to compress.",
+                "- The source may have been moved or deleted.",
+                "Confirm that the source still exists, then add the task again.",
+            )
+
+        if isinstance(error, PermissionError):
+            return cls._user_error(
+                "Permission Denied",
+                "BatchZip could not read the source or create the archive.",
+                "- Your account may not have access to the source or output folder.",
+                "Choose files and an output folder you can access, then try again.",
+            )
+
+        if isinstance(error, NotADirectoryError):
+            return cls._user_error(
+                "Invalid Output Location",
+                "The selected output path is not a folder.",
+                "- The path may point to a file or may no longer be available.",
+                "Choose a valid output folder, then try again.",
+            )
+
+        if isinstance(error, InvalidOutputLocationError):
+            return cls._user_error(
+                "Invalid Output Location",
+                "BatchZip could not save the archive in the selected location.",
+                "- The output folder is inside the folder being compressed.",
+                "Choose an output folder outside the source folder, then try again.",
+            )
+
+        if isinstance(error, UnsupportedArchiveFormatError):
+            return cls._user_error(
+                "Unsupported Archive Format",
+                "BatchZip could not start this compression task.",
+                "- The selected archive format is not supported.",
+                "Select ZIP or 7Z, then try again.",
+            )
+
+        if isinstance(error, RuntimeError):
+            return cls._user_error(
+                "Unable to Create Output Folder",
+                "BatchZip could not create the selected output folder.",
+                "- The path may be invalid, the drive may be unavailable, or write access may be denied.",
+                "Check the path and folder permissions, or choose another location.",
+            )
+
+        if isinstance(error, OSError):
+            return cls._user_error(
+                "Unable to Start Compression",
+                "BatchZip could not start the 7-Zip compression program.",
+                "- 7-Zip may be unavailable, or Windows may have denied access.",
+                "Check the 7-Zip installation and folder permissions, then try again.",
+            )
+
+        return cls._user_error(
+            "Compression Failed",
+            "BatchZip could not complete this compression task.",
+            "- The source or output location may be unavailable.",
+            "Check the source and output folder, then try again.",
+        )
 
     @staticmethod
     def _read_process_output(stream, output_queue):
@@ -190,14 +310,13 @@ class CompressThread(QThread):
         finally:
             stream.close()
 
-    def _drain_output(self, output_queue, output_lines, task, current_progress):
+    def _drain_output(self, output_queue, task, current_progress):
         while True:
             try:
                 line = output_queue.get_nowait()
             except queue.Empty:
                 break
 
-            output_lines.append(line)
             progress = extract_progress(line)
 
             if progress is not None and progress != current_progress:
@@ -208,23 +327,8 @@ class CompressThread(QThread):
         return current_progress
 
     @staticmethod
-    def _failure_message(compressor, return_code, output_lines):
-        base_message = compressor.error_message(return_code)
-        details = [
-            line.strip()
-            for line in output_lines
-            if line.strip() and extract_progress(line) is None
-        ]
-
-        if not details:
-            return base_message
-
-        detail = details[-1]
-
-        if len(detail) > 300:
-            detail = detail[-300:]
-
-        return f"{base_message} {detail}"
+    def _failure_message(compressor, return_code):
+        return compressor.error_message(return_code)
 
     @staticmethod
     def _suspend_process(process_handle):

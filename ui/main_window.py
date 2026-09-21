@@ -522,9 +522,6 @@ class MainWindow(QMainWindow):
 
         self.cards[index].updateTask(task)
 
-        if not success and task.error_message:
-            self.cards[index].setToolTip(task.error_message)
-
     def togglePause(self):
 
         if not self.thread:
@@ -613,7 +610,13 @@ class MainWindow(QMainWindow):
             QListWidget.DragDropMode.InternalMove
         )
 
-        self.showCompleteDialog(success, failed, folder)
+        failed_tasks = [
+            task
+            for task in self.tasks
+            if task.status == "Failed" and task.error_message
+        ]
+
+        self.showCompleteDialog(success, failed, folder, failed_tasks)
 
     def onWorkerError(self, message):
 
@@ -628,7 +631,6 @@ class MainWindow(QMainWindow):
                 task.progress = 0
                 task.error_message = message
                 card.updateTask(task)
-                card.setToolTip(message)
 
         # 恢复拖拽
         self.listWidget.setDragDropMode(
@@ -673,13 +675,15 @@ class MainWindow(QMainWindow):
         self,
         success,
         failed,
-        folder
+        folder,
+        failed_tasks,
     ):
 
         dialog = CompleteDialog(
             success,
             failed,
-            folder
+            folder,
+            failed_tasks,
         )
 
         dialog.exec()

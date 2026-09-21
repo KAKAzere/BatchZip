@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,7 +18,12 @@ def _find_in_path():
         result = subprocess.run(
             ["where.exe", "7z"],
             capture_output=True,
-            text=True
+            text=True,
+            creationflags=(
+                subprocess.CREATE_NO_WINDOW
+                if os.name == "nt"
+                else 0
+            ),
         )
 
         if result.returncode == 0:
