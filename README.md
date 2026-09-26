@@ -15,7 +15,7 @@
 
 BatchZip is a modern batch compression tool for Windows, built with PySide6 and powered by 7-Zip.
 
-It provides a simple graphical workflow for compressing multiple files and folders without relying on command-line operations. BatchZip supports task queues, ZIP and 7Z formats, real-time progress tracking, pause and resume, cancellation, and flexible output management.
+It provides a simple graphical workflow for compressing multiple files and folders without relying on command-line operations. BatchZip supports task queues, ZIP and 7Z formats, real-time progress tracking, pause and resume, cancellation, warning handling, and flexible output management.
 
 ---
 
@@ -29,8 +29,11 @@ It provides a simple graphical workflow for compressing multiple files and folde
 - Pause, resume, or cancel the active compression task.
 - Automatically remove incomplete archives after cancellation or unexpected failures.
 - Automatically locate 7-Zip through PATH, Windows Registry, and common installation folders.
-- Classify compression errors and provide clear recovery suggestions.
-- Avoid overwriting existing archives by generating unique output names.
+- Classify 7-Zip errors and provide clear recovery information.
+- Handle 7-Zip warnings separately and let users keep or delete incomplete archives.
+- Avoid silently overwriting existing archives by generating unique output names.
+- Keep BatchZip-managed 7-Zip processes isolated per application instance.
+- Automatically terminate the related 7-Zip process if BatchZip is forcibly closed.
 - Show completion summaries, detailed failure information, sound notifications, and optional Windows notifications.
 - Follow the system light or dark theme.
 
@@ -62,7 +65,8 @@ Switch between **ZIP** and **7Z** formats with a single click.
 ## 📋 Requirements
 
 - Windows 10 or Windows 11
-- Python 3.12 or later when running from source
+- Python 3.14.x when running from source
+- Official release builds use Python 3.14.7 64-bit
 - [7-Zip](https://www.7-zip.org/) installed on the computer
 
 ---
@@ -105,6 +109,10 @@ Run:
 .\build.bat
 ```
 
+The build process uses an isolated virtual environment and locked dependencies to keep release builds consistent.
+
+The build pipeline validates the Python version, dependency environment, version metadata, automated tests, and PyInstaller environment before producing the executable.
+
 The finished executable will be created at:
 
 ```text
@@ -131,21 +139,25 @@ BatchZip
 │           └── queue.png
 │
 ├── core
-│   └── Compression logic
+│   └── Compression logic and application versioning
 │
 ├── ui
 │   └── User interface
 │
 ├── tests
-│   └── Test cases
+│   └── Automated test cases
 │
 ├── tools
-│   └── Utility scripts
+│   └── Build and validation utilities
 │
 ├── releases
 │   ├── v1.0.0-rc2.md
-│   └── v1.0.0-rc3.md
+│   ├── v1.0.0-rc3.md
+│   └── v1.0.0-rc4.md
 │
+├── requirements.txt
+├── requirements-dev.txt
+├── requirements-lock.txt
 ├── main.py
 └── BatchZip.spec
 ```
@@ -154,7 +166,7 @@ BatchZip
 
 ## 📂 Output Naming
 
-BatchZip never silently overwrites existing archives.
+BatchZip avoids silently overwriting existing archives by generating unique output names.
 
 If:
 
@@ -187,12 +199,6 @@ Windows 11 Home 25H2
 Clean Virtual Machine Environment
 ```
 
-Current release candidate:
-
-```text
-v1.0.0-rc3
-```
-
 Verified:
 
 - ✅ Standalone EXE startup
@@ -202,15 +208,29 @@ Verified:
 - ✅ ZIP compression
 - ✅ 7Z compression
 - ✅ Archive extraction verification
+- ✅ Real-time progress reporting
+- ✅ Pause and resume
+- ✅ Cancellation and incomplete archive cleanup
+- ✅ 7-Zip warning handling
+- ✅ Keep Archive / Delete Archive warning actions
 - ✅ Unicode path compatibility
 - ✅ Chinese, Japanese, and special character paths
+- ✅ Existing archive name conflict handling
 - ✅ Failed compression cleanup
 - ✅ Unexpected failure recovery
+- ✅ Per-instance 7-Zip process isolation
+- ✅ Forced BatchZip termination cleans up its own 7-Zip process
+- ✅ Multiple BatchZip instances remain isolated
+- ✅ Clean PyInstaller build environment
+- ✅ Windows version metadata generation
+- ✅ Locked dependency validation
+- ✅ Build environment drift detection
+- ✅ Clean Windows 11 virtual machine verification
 
 Automated regression tests:
 
 ```text
-19 tests passing
+47 tests passing
 ```
 
 ---
@@ -229,12 +249,27 @@ Built with:
 - PySide6
 - PySide6-Fluent-Widgets
 - 7-Zip
+- PyInstaller
 
 ---
 
 ## 📄 License
 
+## Third-Party Software
+
+BatchZip uses 7-Zip solely as an external compression backend.
+
+BatchZip does not include, bundle, embed, modify, redistribute, or distribute any 7-Zip executable, library, source code, or other 7-Zip files.
+
+BatchZip only invokes a separately installed copy of 7-Zip that is already present on the user's system.
+
+7-Zip must be downloaded and installed separately by the user from the official website:
+
+https://www.7-zip.org/
+
+7-Zip is developed by Igor Pavlov and remains subject to its own copyright and licensing terms.
+
 BatchZip is released under the MIT License.
 
+
 See [LICENSE](LICENSE) for details.
-```

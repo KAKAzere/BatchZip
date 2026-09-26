@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 
 from core.detector import find_7z
+from core.windows_job import WindowsJobError
 
 
 SUPPORTED_FORMATS = {
@@ -39,7 +40,7 @@ class Compressor:
     - ZIP / 7Z 双格式
     """
 
-    def __init__(self, executable=None):
+    def __init__(self, executable=None, job=None):
         self.exe = executable or find_7z()
 
         if not self.exe:
@@ -48,6 +49,7 @@ class Compressor:
             )
 
         self.process = None
+        self.job = job
 
     def compress(self, task, output_folder=None, archive_format="zip"):
         """
@@ -111,6 +113,7 @@ class Compressor:
                     "-bsp1",
                     "-bso0",
                     "-bse1",
+                    "-sccUTF-8",
                     str(output_zip),
                     str(input_path)
                 ],
@@ -136,7 +139,42 @@ class Compressor:
                 "The compression program could not be started."
             ) from None
 
+        if self.job is not None:
+            try:
+                self.job.assign(self.process)
+            except WindowsJobError:
+                process_stopped = self._stop_unprotected_process(self.process)
+
+                if not process_stopped:
+                    raise SevenZipLaunchError(
+                        "7-Zip could not be protected by Windows Job Object "
+                        "and could not be stopped."
+                    ) from None
+
+                raise SevenZipLaunchError(
+                    "7-Zip could not be protected by Windows Job Object."
+                ) from None
+
         return self.process, str(output_zip)
+
+    @staticmethod
+    def _stop_unprotected_process(process):
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        try:
+            return process.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     @staticmethod
     def _unique_output_path(output_folder, base_name, extension):
@@ -160,23 +198,63 @@ class Compressor:
             return False
 
     @staticmethod
-    def error_message(return_code):
-        if return_code == 255:
-            return (
-                "Compression Failed\n\n"
-                "What happened:\n7-Zip stopped before the archive was completed.\n\n"
-                "Possible reasons:\n"
-                "- 7-Zip was interrupted.\n"
-                "- Windows or another application stopped the process.\n\n"
-                "Suggestion:\nCheck that 7-Zip can run normally, then try again."
-            )
+    def error_message(return_code, diagnostic_output=""):
+        details = {
+            1: (
+                "Compression Completed with Warnings",
+                "The archive was created, but some files may not have been added.",
+                "7-Zip reported a non-fatal warning.",
+                "Review the 7-Zip details before using the archive.",
+                "Warning",
+            ),
+            2: (
+                "Compression Failed",
+                "7-Zip could not complete the archive.",
+                "7-Zip reported a fatal error.",
+                "Review the 7-Zip details, then check the source and output folder.",
+                "Fatal Error",
+            ),
+            7: (
+                "Compression Failed",
+                "7-Zip rejected the compression command.",
+                "The 7-Zip command line or its arguments were invalid.",
+                "Check the 7-Zip installation, then try again.",
+                "Command Line Error",
+            ),
+            8: (
+                "Compression Failed",
+                "7-Zip did not have enough memory to complete the archive.",
+                "There was not enough memory for the operation.",
+                "Close other applications or reduce the amount of data, then try again.",
+                "Not Enough Memory",
+            ),
+            255: (
+                "Compression Failed",
+                "7-Zip stopped before the archive was completed.",
+                "7-Zip was interrupted without a BatchZip Cancel request.",
+                "Check whether Windows or another application stopped 7-Zip, then try again.",
+                "Interrupted",
+            ),
+        }
 
-        return (
-            "Compression Failed\n\n"
-            "What happened:\n7-Zip could not create the archive.\n\n"
-            "Possible reasons:\n"
-            "- The source could not be read.\n"
-            "- The output location is unavailable.\n"
-            "- The drive may not have enough free space.\n\n"
-            "Suggestion:\nCheck the source, output folder, and available space, then try again."
+        title, what, cause, suggestion, result = details.get(
+            return_code,
+            (
+                "Compression Failed",
+                "7-Zip returned an unrecognized failure code.",
+                "The archive result cannot be trusted.",
+                "Review the 7-Zip details, then try again.",
+                "Unknown Error",
+            ),
         )
+        message = (
+            f"{title}\n\n"
+            f"What happened:\n{what}\n\n"
+            f"Possible reasons:\nReturn Code {return_code}: {result}\n{cause}\n\n"
+            f"Suggestion:\n{suggestion}"
+        )
+
+        if diagnostic_output:
+            message += f"\n\n7-Zip details:\n{diagnostic_output}"
+
+        return message

@@ -1,5 +1,6 @@
 import os
 import queue
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -15,6 +16,7 @@ from core.compressor import (
     UnsupportedArchiveFormatError,
 )
 from core.progress import extract_progress, iter_output_messages
+from core.windows_job import WindowsJob, WindowsJobError
 
 
 class CompressThread(QThread):
@@ -22,12 +24,15 @@ class CompressThread(QThread):
 
     taskStarted = Signal(object)
     taskProgress = Signal(object, int)
-    taskFinished = Signal(object, bool)
+    taskFinished = Signal(object, str)
     taskCancelled = Signal(object)
     overallStatus = Signal(str)
-    allFinished = Signal(int, int, str)
+    allFinished = Signal(int, int, int, str)
     cancelled = Signal()
     error = Signal(str)
+
+    DIAGNOSTIC_MESSAGE_LIMIT = 64
+    DIAGNOSTIC_CHARACTER_LIMIT = 16384
 
     def __init__(self, tasks, output_folder, archive_format="zip"):
         super().__init__()
@@ -41,11 +46,27 @@ class CompressThread(QThread):
         self._cancel_requested = False
         self.process = None
         self._current_output_path = ""
+        self.stop_error = ""
+        self.job = None
 
     def run(self):
         try:
-            compressor = Compressor()
+            self.job = WindowsJob()
+        except WindowsJobError:
+            self.error.emit(
+                self._user_error(
+                    "Unable to Start Compression",
+                    "BatchZip could not create Windows process protection.",
+                    "Windows Job Object could not be created.",
+                    "Restart BatchZip, then try again.",
+                )
+            )
+            return
+
+        try:
+            compressor = Compressor(job=self.job)
         except SevenZipNotFoundError:
+            self._close_job()
             self.error.emit(
                 self._user_error(
                     "7-Zip Not Found",
@@ -56,6 +77,7 @@ class CompressThread(QThread):
             )
             return
         except Exception:
+            self._close_job()
             self.error.emit(
                 self._user_error(
                     "Unable to Start Compression",
@@ -67,6 +89,7 @@ class CompressThread(QThread):
             return
 
         success = 0
+        warnings = 0
         failed = 0
         first_path = self.tasks[0].path if self.tasks else os.getcwd()
         last_folder = self.output_folder or os.path.dirname(first_path)
@@ -93,10 +116,13 @@ class CompressThread(QThread):
                     task.progress = 0
                     task.error_message = self._compress_error_message(exc)
                     failed += 1
-                    self.taskFinished.emit(task, False)
+                    self.taskFinished.emit(task, "Failed")
                     continue
 
                 self._current_output_path = output_path
+                self._diagnostic_messages = []
+                self._diagnostic_characters = 0
+                self._diagnostics_truncated = False
                 output_queue = queue.Queue()
                 reader = threading.Thread(
                     target=self._read_process_output,
@@ -126,7 +152,23 @@ class CompressThread(QThread):
                         )
 
                     if not self._running:
-                        self._terminate_process()
+                        if not self._terminate_process():
+                            self.stop_error = self._user_error(
+                                "Unable to Cancel Compression",
+                                "BatchZip could not confirm that 7-Zip stopped.",
+                                "- Windows may have denied permission to stop the process.\n"
+                                "- The 7-Zip process may still be running.",
+                                "Close 7-Zip manually, then check the incomplete archive.",
+                            )
+                            task.status = "Failed"
+                            task.progress = 0
+                            task.error_message = self.stop_error
+                            self.taskFinished.emit(task, "Failed")
+
+                            if self._cancel_requested:
+                                self.error.emit(self.stop_error)
+
+                            return
                         break
 
                     if self._paused:
@@ -145,7 +187,7 @@ class CompressThread(QThread):
 
                     self.msleep(50)
 
-                reader.join(timeout=1)
+                reader.join(timeout=2)
                 progress = self._drain_output(
                     output_queue,
                     task,
@@ -153,7 +195,25 @@ class CompressThread(QThread):
                 )
 
                 if not self._running:
-                    self._remove_partial_archive(output_path)
+                    if not self._remove_partial_archive(output_path):
+                        self.stop_error = self._user_error(
+                            "Unable to Remove Incomplete Archive",
+                            "7-Zip stopped, but BatchZip could not remove the incomplete archive.",
+                            "- The archive may still be in use.\n"
+                            "- Windows may have denied permission to delete it.",
+                            f"Remove the incomplete archive manually:\n{output_path}",
+                        )
+                        task.status = "Failed"
+                        task.progress = 0
+                        task.output_path = output_path
+                        task.error_message = self.stop_error
+                        self.taskFinished.emit(task, "Failed")
+
+                        if self._cancel_requested:
+                            self.error.emit(self.stop_error)
+
+                        return
+
                     task.status = "Cancelled"
                     task.progress = 0
                     task.output_path = ""
@@ -169,17 +229,39 @@ class CompressThread(QThread):
                     success += 1
                     last_folder = os.path.dirname(output_path)
                     self.taskProgress.emit(task, 100)
-                    self.taskFinished.emit(task, True)
+                    self.taskFinished.emit(task, "Completed")
+                elif self.process.returncode == 1:
+                    task.progress = 100
+                    task.status = "Completed with warnings"
+                    task.output_path = output_path
+                    task.error_message = self._failure_message(
+                        compressor,
+                        self.process.returncode,
+                        self._diagnostic_output(),
+                    )
+                    warnings += 1
+                    last_folder = os.path.dirname(output_path)
+                    self.taskProgress.emit(task, 100)
+                    self.taskFinished.emit(task, "Completed with warnings")
                 else:
-                    self._remove_partial_archive(output_path)
+                    cleanup_succeeded = self._remove_partial_archive(output_path)
                     task.status = "Failed"
                     task.progress = 0
                     task.error_message = self._failure_message(
                         compressor,
                         self.process.returncode,
+                        self._diagnostic_output(),
                     )
+
+                    if not cleanup_succeeded:
+                        task.error_message += (
+                            "\n\nCleanup warning:\n"
+                            f"The incomplete archive could not be removed:\n{output_path}"
+                        )
+                        task.output_path = output_path
+
                     failed += 1
-                    self.taskFinished.emit(task, False)
+                    self.taskFinished.emit(task, "Failed")
 
                 self.process = None
                 self._current_output_path = ""
@@ -189,24 +271,56 @@ class CompressThread(QThread):
                 self.cancelled.emit()
             elif self._running:
                 self.overallStatus.emit("Completed")
-                self.allFinished.emit(success, failed, last_folder)
+                self.allFinished.emit(success, warnings, failed, last_folder)
         except Exception:
             try:
                 self._terminate_process()
             except Exception:
                 pass
 
+            cleanup_succeeded = True
+
             try:
                 if self._current_output_path:
-                    self._remove_partial_archive(self._current_output_path)
+                    cleanup_succeeded = self._remove_partial_archive(
+                        self._current_output_path
+                    )
             finally:
                 self._current_output_path = ""
+
+            message = self._user_error(
+                "Compression Failed",
+                "BatchZip could not continue the compression task.",
+                "The compression program or required files may be unavailable.",
+                "Check the source files and output location, then try again.",
+            )
+
+            if not cleanup_succeeded:
+                message += (
+                    "\n\nCleanup warning:\n"
+                    "The incomplete archive could not be removed."
+                )
+
+            self.error.emit(message)
+        finally:
+            self._close_job()
+
+    def _close_job(self):
+        if self.job is None:
+            return
+
+        job = self.job
+        self.job = None
+
+        try:
+            job.close()
+        except WindowsJobError:
             self.error.emit(
                 self._user_error(
-                    "Compression Failed",
-                    "BatchZip could not continue the compression task.",
-                    "The compression program or required files may be unavailable.",
-                    "Check the source files and output location, then try again.",
+                    "Unable to Close Process Protection",
+                    "BatchZip could not close the Windows Job Object.",
+                    "Windows did not release the process protection handle.",
+                    "Restart BatchZip before starting another compression.",
                 )
             )
 
@@ -319,6 +433,15 @@ class CompressThread(QThread):
 
             progress = extract_progress(line)
 
+            if self._is_diagnostic_message(line, progress):
+                if progress is not None:
+                    line = re.sub(
+                        r"(?<!\d)(?:100|[1-9]?\d)%",
+                        "",
+                        line,
+                    ).strip()
+                self._append_diagnostic(line)
+
             if progress is not None and progress != current_progress:
                 current_progress = progress
                 task.progress = progress
@@ -327,8 +450,59 @@ class CompressThread(QThread):
         return current_progress
 
     @staticmethod
-    def _failure_message(compressor, return_code):
-        return compressor.error_message(return_code)
+    def _failure_message(compressor, return_code, diagnostic_output=""):
+        return compressor.error_message(return_code, diagnostic_output)
+
+    @staticmethod
+    def _is_diagnostic_message(message, progress):
+        if progress is None:
+            return bool(message.strip())
+
+        lower_message = message.lower()
+        return any(
+            word in lower_message
+            for word in (
+                "warning",
+                "error",
+                "denied",
+                "cannot",
+                "failed",
+                "locked",
+                "insufficient",
+            )
+        )
+
+    def _append_diagnostic(self, message):
+        message = message.strip()
+
+        if not message:
+            return
+
+        if len(message) > self.DIAGNOSTIC_CHARACTER_LIMIT:
+            message = message[-self.DIAGNOSTIC_CHARACTER_LIMIT:]
+            self._diagnostics_truncated = True
+
+        self._diagnostic_messages.append(message)
+        self._diagnostic_characters += len(message)
+
+        while (
+            len(self._diagnostic_messages) > self.DIAGNOSTIC_MESSAGE_LIMIT
+            or self._diagnostic_characters > self.DIAGNOSTIC_CHARACTER_LIMIT
+        ):
+            removed = self._diagnostic_messages.pop(0)
+            self._diagnostic_characters -= len(removed)
+            self._diagnostics_truncated = True
+
+    def _diagnostic_output(self):
+        output = "\n".join(self._diagnostic_messages)
+
+        if self._diagnostics_truncated:
+            return (
+                "[7-Zip output was truncated; only the last part is shown.]\n"
+                f"{output}"
+            )
+
+        return output
 
     @staticmethod
     def _suspend_process(process_handle):
@@ -353,8 +527,14 @@ class CompressThread(QThread):
             return None
 
     def _terminate_process(self):
-        if self.process is None or self.process.poll() is not None:
-            return
+        if self.process is None:
+            return True
+
+        try:
+            if self.process.poll() is not None:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            return False
 
         try:
             self.process.terminate()
@@ -364,27 +544,27 @@ class CompressThread(QThread):
                 self.process.kill()
                 self.process.wait(timeout=2)
             except (OSError, subprocess.SubprocessError):
-                pass
-        except OSError:
-            pass
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        try:
+            return self.process.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     @staticmethod
     def _remove_partial_archive(output_path):
         try:
             Path(output_path).unlink(missing_ok=True)
+            return True
         except OSError:
-            pass
+            return False
 
     def _request_stop(self, cancelled):
         self._cancel_requested = cancelled
         self._running = False
         self._paused = False
-
-        if self.process is not None and self.process.poll() is None:
-            try:
-                self.process.terminate()
-            except OSError:
-                pass
 
     def pause(self):
         self._paused = True

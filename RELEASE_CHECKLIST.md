@@ -1,4 +1,4 @@
-# BatchZip v1.0.0-rc2 Release Checklist
+# BatchZip Release Checklist
 
 ## Before building
 
@@ -20,10 +20,10 @@
 
 - [ ] Run `git status` and review every changed or untracked file.
 - [ ] Run `git add .`.
-- [ ] Commit the v1.0.0-rc2 source.
+- [ ] Commit the `<VERSION>` source.
 - [ ] Push the commit to GitHub.
-- [ ] Create the `v1.0.0-rc2` tag and GitHub Release.
+- [ ] Create the `v<VERSION>` tag and GitHub Release.
 - [ ] Upload `BatchZip.exe` as the release asset.
-- [ ] Copy the v1.0.0-rc2 notes from `CHANGELOG.md` into the release description.
+- [ ] Copy the `<VERSION>` notes from `CHANGELOG.md` into the release description.
 
 Do not upload a manually zipped working directory containing `.git`, `.venv`, `__pycache__`, `build`, or `dist`.

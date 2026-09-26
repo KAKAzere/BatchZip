@@ -32,7 +32,7 @@ from qfluentwidgets import (
 
 from ui.drop_zone import DropZone
 from ui.task_card import TaskCard
-from ui.complete_dialog import CompleteDialog
+from ui.complete_dialog import CompleteDialog, WarningArchiveDialog
 
 from core.task import Task
 from core.compress_thread import CompressThread
@@ -501,22 +501,18 @@ class MainWindow(QMainWindow):
 
         self.cards[index].updateProgress(percent)
 
-    def onTaskFinished(self, task, success):
+    def onTaskFinished(self, task, result):
 
         if task not in self.tasks:
             return
 
         index = self.tasks.index(task)
 
-        task.status = (
-            "Completed"
-            if success
-            else "Failed"
-        )
+        task.status = result
 
         task.progress = (
             100
-            if success
+            if result in ("Completed", "Completed with warnings")
             else 0
         )
 
@@ -591,7 +587,7 @@ class MainWindow(QMainWindow):
             QListWidget.DragDropMode.InternalMove
         )
 
-    def onAllFinished(self, success, failed, folder):
+    def onAllFinished(self, success, warnings, failed, folder):
 
         self.isCompressing = False
         self.isPaused = False
@@ -602,7 +598,7 @@ class MainWindow(QMainWindow):
         self.pauseBtn.setIcon(FluentIcon.PAUSE)
 
         self.statusLabel.setText(
-            "Completed" if failed == 0 else f"Completed with {failed} failure(s)"
+            f"Completed: {success} · Warnings: {warnings} · Failed: {failed}"
         )
 
         # 恢复拖拽
@@ -610,13 +606,34 @@ class MainWindow(QMainWindow):
             QListWidget.DragDropMode.InternalMove
         )
 
+        warning_tasks = [
+            task
+            for task in self.tasks
+            if task.status == "Completed with warnings"
+        ]
+
+        warning_actions = {}
+
+        for task in warning_tasks:
+            dialog = WarningArchiveDialog(task, self)
+            dialog.exec()
+            warning_actions[id(task)] = dialog.archive_action
+
         failed_tasks = [
             task
             for task in self.tasks
             if task.status == "Failed" and task.error_message
         ]
 
-        self.showCompleteDialog(success, failed, folder, failed_tasks)
+        self.showCompleteDialog(
+            success,
+            warnings,
+            failed,
+            folder,
+            warning_tasks,
+            failed_tasks,
+            warning_actions,
+        )
 
     def onWorkerError(self, message):
 
@@ -674,16 +691,22 @@ class MainWindow(QMainWindow):
     def showCompleteDialog(
         self,
         success,
+        warnings,
         failed,
         folder,
+        warning_tasks,
         failed_tasks,
+        warning_actions,
     ):
 
         dialog = CompleteDialog(
             success,
+            warnings,
             failed,
             folder,
+            warning_tasks,
             failed_tasks,
+            warning_actions,
         )
 
         dialog.exec()
@@ -785,6 +808,25 @@ class MainWindow(QMainWindow):
                 return
 
             self.thread.stop()
-            self.thread.wait()
+
+            if not self.thread.wait(6000):
+                QMessageBox.critical(
+                    self,
+                    "BatchZip",
+                    "Unable to Close BatchZip\n\n"
+                    "What happened:\nThe compression thread did not stop in time.\n\n"
+                    "Suggestion:\nWait for 7-Zip to finish or stop it manually, then try again."
+                )
+                event.ignore()
+                return
+
+            if self.thread.stop_error:
+                QMessageBox.critical(
+                    self,
+                    "BatchZip",
+                    self.thread.stop_error
+                )
+                event.ignore()
+                return
 
         event.accept()

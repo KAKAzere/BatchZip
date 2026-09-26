@@ -34,6 +34,7 @@ class TaskCard(QFrame):
         "Waiting": "#909399",
         "Compressing": "#2563EB",
         "Completed": "#16A34A",
+        "Completed with warnings": "#D97706",
         "Failed": "#DC2626",
         "Cancelled": "#D97706",
     }
@@ -42,6 +43,7 @@ class TaskCard(QFrame):
         "Waiting": "○",
         "Compressing": "◐",
         "Completed": "✓",
+        "Completed with warnings": "⚠",
         "Failed": "✕",
         "Cancelled": "■",
     }
@@ -236,7 +238,10 @@ class TaskCard(QFrame):
 
         self.task.status = status
 
-        if status == "Failed" and self.task.error_message:
+        if (
+            status in ("Completed with warnings", "Failed")
+            and self.task.error_message
+        ):
             self.setToolTip(self.task.error_message)
         else:
             self.setToolTip("")
@@ -294,10 +299,17 @@ class TaskCard(QFrame):
             }
             """)
 
-        if status in ("Completed", "Failed", "Cancelled"):
+        if status in (
+            "Completed",
+            "Completed with warnings",
+            "Failed",
+            "Cancelled",
+        ):
 
             self.progress.setValue(
-                100 if status == "Completed" else 0
+                100
+                if status in ("Completed", "Completed with warnings")
+                else 0
             )
 
             if self.task.compact:

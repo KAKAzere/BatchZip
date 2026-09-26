@@ -3,10 +3,8 @@ from pathlib import Path
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
+from core.version import APP_VERSION
 from ui.main_window import MainWindow
-
-
-APP_VERSION = "1.0.0"
 
 
 def resource_path(relative_path):
