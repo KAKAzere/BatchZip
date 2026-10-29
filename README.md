@@ -117,7 +117,7 @@ Python · PySide6 · PySide6-Fluent-Widgets · 7-Zip · PyInstaller
 
 ## Project status
 
-Current development version: **1.0.0-rc5**, not yet published.
+Latest pre-release: **[v1.0.0-rc5](https://github.com/KAKAzere/BatchZip/releases/tag/v1.0.0-rc5)**.
 
 Development notes for each candidate are in the [`releases`](releases) directory.
 The automated suite currently covers 167 tests, all passing.
