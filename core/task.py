@@ -9,7 +9,6 @@ class Task:
     progress: int = 0
     output_path: str = ""
     error_message: str = ""
-    compact: bool = False
 
     @property
     def name(self):

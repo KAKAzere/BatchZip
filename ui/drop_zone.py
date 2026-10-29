@@ -8,6 +8,12 @@ from PySide6.QtWidgets import (
 )
 from qfluentwidgets import PushButton, BodyLabel, FluentIcon
 
+from ui.product_ui import (
+    FolderIllustration,
+    apply_button_style,
+    drop_zone_qss,
+)
+
 
 class DropZone(QFrame):
     filesDropped = Signal(list)
@@ -17,29 +23,29 @@ class DropZone(QFrame):
 
         self.setAcceptDrops(True)
         self.setObjectName("dropZone")
+        # H.4-P: the drop zone shares the top band with the compression panel, so
+        # it is compact instead of 190 px tall. Dropping still works anywhere on
+        # the frame, because the frame itself is the drop target.
         self.setMaximumHeight(300)
-        self.setMinimumHeight(140)
+        self.setMinimumHeight(130)
 
         self.mainLayout = QVBoxLayout(self)
         self.mainLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mainLayout.setSpacing(6)
-        self.mainLayout.setContentsMargins(16, 10, 16, 10)
+        self.mainLayout.setSpacing(7)
+        self.mainLayout.setContentsMargins(16, 8, 16, 10)
 
-        self.icon = QLabel("📦")
-        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon.setStyleSheet("font-size:56px;")
+        # Product-UI: an illustrated folder replaces the emoji mark. It lifts its
+        # content sheet on hover and drag-over, so the drop intent is legible
+        # before the user reads a single word.
+        self.icon = FolderIllustration()
+        self.icon.resizeTo(76)
 
-        self.title = QLabel("Drag files or folders here")
+        self.title = QLabel("Drop files or folders here")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title.setStyleSheet("""
-            font-size:22px;
+            font-size:17px;
             font-weight:600;
         """)
-
-        self.hint = BodyLabel("Supports multiple files and folders")
-
-        self.countLabel = BodyLabel("0 files in queue")
-        self.countLabel.hide()
 
         self.filesButton = PushButton(
             "Choose Files",
@@ -54,42 +60,52 @@ class DropZone(QFrame):
         self.folderButton.clicked.connect(self.chooseFolder)
 
         buttonRow = QHBoxLayout()
+        buttonRow.addStretch()
         buttonRow.setSpacing(10)
         buttonRow.addWidget(self.filesButton)
         buttonRow.addWidget(self.folderButton)
+        buttonRow.addStretch()
 
-        self.mainLayout.addWidget(self.icon)
+        self.mainLayout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignHCenter)
         self.mainLayout.addWidget(self.title)
-        self.mainLayout.addWidget(self.hint)
-        self.mainLayout.addWidget(self.countLabel)
         self.mainLayout.addLayout(buttonRow)
 
-        self.normalStyle = """
-        #dropZone{
-            border:2px dashed rgba(120,120,120,140);
-            border-radius:18px;
-            background:rgba(255,255,255,18);
-        }
-        """
+        self._apply_theme()
 
-        self.hoverStyle = """
-        #dropZone{
-            border:2px dashed #2563EB;
-            border-radius:18px;
-            background:rgba(37,99,235,35);
-        }
-        """
+    def _apply_theme(self):
+        self.setStyleSheet(drop_zone_qss(self.icon.getPeek() > 0.5))
+        apply_button_style(self.filesButton, "quiet")
+        apply_button_style(self.folderButton, "quiet")
 
-        self.setStyleSheet(self.normalStyle)
+    def refreshTheme(self):
+        """Re-apply the theme-keyed styling after a theme switch."""
+        self._apply_theme()
+
+    def resizeTo(self, width, spacing):
+        """Density hook: the compact band gets a smaller folder mark."""
+        self.icon.resizeTo(width)
+        self.mainLayout.setSpacing(spacing)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
             self.title.setText("Release to add files")
-            self.setStyleSheet(self.hoverStyle)
+            self.icon.setActive(True)
+            self.setStyleSheet(drop_zone_qss(True))
 
     def dragLeaveEvent(self, event):
         self.restoreText()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.icon.setActive(True)
+        self.setStyleSheet(drop_zone_qss(True))
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        if self.title.text() == "Drop files or folders here":
+            self.icon.setActive(False)
+            self.setStyleSheet(drop_zone_qss(False))
 
     def dropEvent(self, event):
         self.restoreText()
@@ -118,39 +134,11 @@ class DropZone(QFrame):
             self.filesDropped.emit([folder])
 
     def restoreText(self):
-        self.setStyleSheet(self.normalStyle)
+        self.setStyleSheet(drop_zone_qss(False))
+        self.icon.setActive(False)
 
-        if self.countLabel.isHidden():
-            self.title.setText("Drag files or folders here")
-        else:
-            self.title.setText("BatchZip Queue")
+        self.title.setText("Drop files or folders here")
 
-    def updateQueueCount(self, count):
-        if count == 0:
-            self.title.setText("Drag files or folders here")
-
-            self.hint.show()
-            self.countLabel.hide()
-
-            self.icon.setStyleSheet("font-size:56px;")
-            self.title.setStyleSheet("""
-                font-size:22px;
-                font-weight:600;
-            """)
-
-        else:
-            word = "file" if count == 1 else "files"
-
-            self.title.setText("BatchZip Queue")
-            self.countLabel.setText(f"{count} {word} in queue")
-
-            self.hint.hide()
-            self.countLabel.show()
-
-            self.icon.setStyleSheet("font-size:22px;")
-            self.title.setStyleSheet("""
-                font-size:16px;
-                font-weight:600;
-            """)
-
+    def resetPrompt(self):
+        self.title.setText("Drop files or folders here")
         self.mainLayout.activate()

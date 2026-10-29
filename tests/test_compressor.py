@@ -24,6 +24,8 @@ from core.task import Task
 from core.windows_job import WindowsJob, WindowsJobError
 from ui.complete_dialog import CompleteDialog, WarningArchiveDialog
 from ui.main_window import MainWindow
+from ui.task_model import TaskQueueModel
+from ui.task_queue_controller import TaskQueueController
 
 
 class CompressorPathTests(unittest.TestCase):
@@ -459,8 +461,9 @@ class WarningResultUiTests(unittest.TestCase):
 
     def test_main_window_preserves_warning_status(self):
         task = Task("sample.txt")
-        card = SimpleNamespace(updateTask=lambda updated: None)
-        window = SimpleNamespace(tasks=[task], cards=[card])
+        model = TaskQueueModel()
+        model.append_task(task)
+        window = SimpleNamespace(queueController=TaskQueueController(model))
 
         MainWindow.onTaskFinished(
             window,

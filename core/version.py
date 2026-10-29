@@ -1,7 +1,7 @@
 import re
 
 
-APP_VERSION = "1.0.0-rc4"
+APP_VERSION = "1.0.0-rc5"
 
 _VERSION_PATTERN = re.compile(
     r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
